@@ -4,7 +4,7 @@
 ------------------------------------------------------------------------------------------------------
 --
 -- 1. Create a directory /home/gpadmin/ditl on your DCA.
--- 2. Put cms_data_2008.csv.gz into /home/gpadmin/ditl on your DCA.
+-- 2. Put 2008_cms_data.csv.tar.gz into /home/gpadmin/ditl on your DCA.
 -- 3. Use Appendix A of this script to create the two custom views that show storage and compression data.
 -- 4. Use Appendix B of this script to create the 'example-plpgsql.sql' file in your /home/gpadmin/ditl directory.
 -- 5. The CMS dataset has only 9M recordss.  Use Appendix C of this script to increase the data volume as you wish.
@@ -58,12 +58,12 @@ psql -d bmg
 \d, \d cms, \dv, \d v_gp
 \l
 \i /home/gpadmin/bmg/example-plpgsql.sql  -- execute a sql script to create a pl/pgsql function
-select myfunc (7, 'Hello');  -- test the function.
+select myfunc (3, 'Hello');  -- test the function.
 
 -- Back to loading data.
 -- Use the 'COPY' command in the command line to bulk-load data via the master server.
 \timing on
-\COPY cms FROM '/home/gpadmin/ditl/cms_source_data.csv' CSV HEADER LOG ERRORS INTO cms_load_errors KEEP SEGMENT REJECT LIMIT 50 ROWS;  -- (75 secs.)
+\COPY cms FROM '/home/gpadmin/ditl/2008_cms_data.csv' CSV HEADER LOG ERRORS INTO cms_load_errors KEEP SEGMENT REJECT LIMIT 50 ROWS;  -- (75 secs.)
 select count(*) total_records from cms;
 truncate table cms;
 
