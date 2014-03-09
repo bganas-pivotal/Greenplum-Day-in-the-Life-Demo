@@ -4,16 +4,19 @@
 ------------------------------------------------------------------------------------------------------
 --
 -- 1. Create a directory /home/gpadmin/ditl on your DCA.
--- 2. Put 2008_cms_data.csv.tar.gz into /home/gpadmin/ditl on your DCA.
+-- 2. Put 2008_cms_data.csv.tar.gz into /home/gpadmin/ditl on your DCA.  unzip via 'tar -xvf 2008_cms_data_csv.tar.gz'
 -- 3. Use Appendix A of this script to create the two custom views that show storage and compression data.
 -- 4. Use Appendix B of this script to create the 'example-plpgsql.sql' file in your /home/gpadmin/ditl directory.
--- 5. The CMS dataset has only 9M recordss.  Use Appendix C of this script to increase the data volume as you wish.
+-- 5. The CMS dataset has only 9M records.  Use Appendix C of this script to increase the data volume as you wish.
 -- 6. Use a tool like pgAdmin3 or DbVisualizer to execute the statements in this script during the demo.
 
 
 --------------------------------------------------------------------------------------
 -- PART I - LOADING DATA.  ALSO A QUICK INTRO TO PSQL.
 --------------------------------------------------------------------------------------
+-- create a database to work in.
+create database ditl;
+
 -- Drop these objects if they already exist in the database.
 drop table if exists cms;
 drop table if exists cms_part;
@@ -22,7 +25,7 @@ drop table if exists cms_zlib;
 drop table if exists cms_zlib9;
 drop table if exists wwearthquakes_lastwk;
 drop table if exists cms_load_errors;
-drop table if exists cms_some_key;
+drop table if exists cms_bad_key;
 drop external table if exists cms_backup;
 drop external table if exists cms_export;
 drop external table if exists ext_cms;
@@ -50,18 +53,21 @@ CREATE TABLE cms
 distributed by (car_line_id);
 
 -- Connect to the dca and database through a terminal window.
-ssh gpadmin@10.5.80.41
+-- skip this if connecting locally.
+ssh gpadmin@10.5.80.41  --supply password if prompted
+
 
 -- Some tasks to demo typical stuff for command-line lovers.
-psql -d bmg
+psql -d ditl
 \?, \h, \h vacuum
 \d, \d cms, \dv, \d v_gp
 \l
-\i /home/gpadmin/bmg/example-plpgsql.sql  -- execute a sql script to create a pl/pgsql function
-select myfunc (3, 'Hello');  -- test the function.
+\i /home/gpadmin/ditl/plpgsql.sql  -- execute a sql script to create a pl/pgsql function
+select myfunc (3, 'Hello');  -- test the function.  try it with 7 and 20.
 
 -- Back to loading data.
 -- Use the 'COPY' command in the command line to bulk-load data via the master server.
+-- This will take 5 minutes on a single node VM.  It will take 70 seconds on a 1/4-rack DCA.
 \timing on
 \COPY cms FROM '/home/gpadmin/ditl/2008_cms_data.csv' CSV HEADER LOG ERRORS INTO cms_load_errors KEEP SEGMENT REJECT LIMIT 50 ROWS;  -- (75 secs.)
 select count(*) total_records from cms;
@@ -76,14 +82,14 @@ gpfdist -d /home/gpadmin/ditl/ -p 8081 -l /home/gpadmin/ditl/gpfdist.log &
 -- Create an external table that 'points' to the source file.
 drop external table if exists ext_cms;
 create external table ext_cms (like cms) location ('gpfdist://localhost:8081/2008_cms_data.csv') format 'csv' (header);
--- NOTE:  can also load multiple zipped files (.gz) in parallel without unzipping.  gpfdist://mdw:8081/*.gz'   VERY FAST!) 
+-- NOTE:  can load multiple zipped files in parallel without unzipping.  gpfdist://mdw:8081/*.gz'   VERY FAST!) 
 
 -- View the data to see there are no tricks.
 select count(*) total_recs from cms;
-select count(*) total_recs from ext_cms;  -- (11 secs.)
+select count(*) total_recs from ext_cms;  -- (11 secs.  --only works if the file is unzipped)
 
 -- Load the data from the source file (external table) into the database table.
-insert into cms (select * from ext_cms);  -- (33 secs.)
+insert into cms (select * from ext_cms);  -- (25 seconds on 1/4 rack DCA; 5 minutes on a single-node VM)
 select count(*) total_recs from cms;
 
 
@@ -97,7 +103,6 @@ NST integer, gap numeric, dmin numeric, rms text, net text, id text, updated TEX
 DISTRIBUTED BY (time);
 
 DROP EXTERNAL TABLE IF EXISTS ext_WWearthquakes_lastWk;
-DROP TABLE err_earthquakes;
 create external web table ext_WWearthquakes_lastWk (like WWearthquakes_lastWk) 
 Execute 'wget -qO - http://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_week.csv'  -- defining an OS command to execute
 ON ALL
@@ -126,7 +131,7 @@ select * from cms_seq order by 1;
 
 
 -- Always a good idea to run VACUUM & ANALYZE during normal maintenance or after big loads.
--- Can optionally use pgAdmin3 GUI interface to perform the task.
+-- Can alternatively use pgAdmin3 GUI interface to perform the task.
 vacuum analyze cms;  
 
 
@@ -134,16 +139,16 @@ vacuum analyze cms;
 -- PART II - DATA DISTRIBUTION, PARTITIONING, AND POLYMORPHIC STORAGE.
 --------------------------------------------------------------------------------------
 -- Create a table with a bad distribution key.
-drop table if exists cms_some_key;
-create table cms_some_key (like cms) distributed by (bene_sex_ident_cd);
+drop table if exists cms_bad_key;
+create table cms_bad_key (like cms) distributed by (bene_sex_ident_cd);
 
 -- Load data into the table and browse.
-insert into cms_some_key (select * from cms);  -- (155 secs.)
-select count(*) total_records from cms_some_key;
+insert into cms_bad_key (select * from cms);  -- 140 seconds on a 1/4 rack; 5 minutes on single-node VM)
+select count(*) total_records from cms_bad_key;
 
 -- View skew.  Could also be done live in Command Center in real time.
 Look at 'gp_skew_coefficients' in gp_toolkit.  Lower number is better.
-Look at 'gp_skew_idle_fractions' in gp_toolkit.  0.1 = 10% idle, which is good.  0.5 = 50%, which is bad.
+Look at 'gp_skew_idle_fractions' in gp_toolkit.  0.1 = 10% idle, which is ok.  0.5 = 50%, which is bad.
 select distinct (bene_sex_ident_cd) from cms;   -- A binary key will result in highly skewed data load (compare to cms)
 
 -- Create a partitioned table
@@ -307,8 +312,8 @@ select count(*) total_records from cms;
 insert into cms (select * from cms_backup);
 
 -- Options to backup from the command line.
--- pg_dump -t cms_seq bmg > backup1.sql;  --basic utlity that creates one file on the server.  Loaded via COPY.
--- pg_dump --column-inserts -t cms_seq bmg > backup2.sql --option to include all insert statements.
+pg_dump -t cms_seq ditl > backup1.sql;  --basic utlity that creates one file on the server.  Loaded via COPY.
+pg_dump --column-inserts -t cms_seq ditl > backup2.sql --option to include all insert statements.
 -- pg_restore is used to restore the database.  Has many options as well.
 
 
@@ -320,10 +325,10 @@ insert into cms (select * from cms_backup);
 
 
 -------------------------------------------------------------------------------------------------------------------------------
--- PART V - MADLIB EXAMPLE.  CALLING LOGISTIC REGRESSION IN-LINE SQL.  FRAME A QUESTION THAT CAN'T BE ANSWERED BY SIMPLE BI.
+-- PART V - MADLIB EXAMPLE.  CALLING LINEAR REGRESSION IN-LINE SQL.  FRAME A QUESTION THAT CAN'T BE ANSWERED BY SIMPLE BI.
 -- WORK-IN-PROGRESS  
 -------------------------------------------------------------------------------------------------------------------------------
--- select (madlib.linregr(car_line_place_of_srvc_cd, array[1, car_line_srvc_cnt, bene_age_cat_cd])).* from cms;
+select (madlib.linregr(car_line_place_of_srvc_cd, array[1, car_line_srvc_cnt, bene_age_cat_cd])).* from cms;
 
 
 
